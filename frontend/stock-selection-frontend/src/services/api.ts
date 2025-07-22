@@ -1,0 +1,164 @@
+// API服务层
+
+import axios, { AxiosResponse } from 'axios';
+import { message } from 'antd';
+import type {
+  ApiResponse,
+  DashboardData,
+  CandidateStock,
+  StrategySettings,
+  BacktestRequest,
+  BacktestResult,
+  ExportRequest
+} from '../types';
+
+// 创建axios实例 - 真实数据版本
+const api = axios.create({
+  baseURL: 'https://zbhwqysllfettelcwynh.supabase.co/functions/v1/stock-api-real',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpiaHdxeXNsbGZldHRlbGN3eW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMwOTM1NjAsImV4cCI6MjA2ODY2OTU2MH0.3axIXGwTGQl1OnQb327gZo0WpOyoc3G5Pz_EQvYAVuA'
+  }
+});
+
+// 请求拦截器
+api.interceptors.request.use(
+  (config) => {
+    // 可以在这里添加认证token等
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// 响应拦截器
+api.interceptors.response.use(
+  (response: AxiosResponse<ApiResponse>) => {
+    const { data } = response;
+    
+    // 检查业务状态码
+    if (data.code !== 200) {
+      message.error(data.message || '请求失败');
+      return Promise.reject(new Error(data.message));
+    }
+    
+    return response;
+  },
+  (error) => {
+    const errorMessage = error.response?.data?.detail || error.message || '网络错误';
+    message.error(errorMessage);
+    return Promise.reject(error);
+  }
+);
+
+// API方法定义
+export const apiService = {
+  // Dashboard相关
+  async getDashboard(tradeDate?: string): Promise<DashboardData> {
+    const params = tradeDate ? { trade_date: tradeDate } : {};
+    const response = await api.get<ApiResponse<DashboardData>>('/dashboard', { params });
+    return response.data.data;
+  },
+
+  async getMarketSentiment(tradeDate?: string) {
+    const params = tradeDate ? { trade_date: tradeDate } : {};
+    const response = await api.get('/dashboard/market-sentiment', { params });
+    return response.data.data;
+  },
+
+  async getStrategyStats(tradeDate?: string) {
+    const params = tradeDate ? { trade_date: tradeDate } : {};
+    const response = await api.get('/dashboard/stats', { params });
+    return response.data.data;
+  },
+
+  // 股票数据相关
+  async getCandidateStocks(tradeDate?: string, limit: number = 50): Promise<{
+    trade_date: string;
+    candidates: CandidateStock[];
+    total_count: number;
+  }> {
+    const params: any = { limit };
+    if (tradeDate) params.trade_date = tradeDate;
+    
+    const response = await api.get<ApiResponse>('/stocks/candidates', { params });
+    return response.data.data;
+  },
+
+  async getStockBasicInfo(tsCode: string) {
+    const response = await api.get(`/stocks/basic/${tsCode}`);
+    return response.data.data;
+  },
+
+  async getStockStrategyResult(tsCode: string, tradeDate?: string) {
+    const params = tradeDate ? { trade_date: tradeDate } : {};
+    const response = await api.get(`/stocks/strategy-result/${tsCode}`, { params });
+    return response.data.data;
+  },
+
+  async searchStocks(keyword: string, limit: number = 20) {
+    const params = { keyword, limit };
+    const response = await api.get('/stocks/search', { params });
+    return response.data.data;
+  },
+
+  // 策略相关
+  async recomputeStrategy(data: { trade_date?: string; force_update?: boolean }) {
+    const response = await api.post('/strategy/recompute', data);
+    return response.data.data;
+  },
+
+  async updateStrategyConfig(configUpdates: Record<string, any>) {
+    const response = await api.put('/strategy/config', { config_updates: configUpdates });
+    return response.data.data;
+  },
+
+  async getStrategyStatus() {
+    const response = await api.get('/strategy/status');
+    return response.data.data;
+  },
+
+  // 设置相关
+  async getSettings(): Promise<{ settings: Record<string, string>; count: number }> {
+    const response = await api.get<ApiResponse>('/settings');
+    return response.data.data;
+  },
+
+  async updateSetting(settingKey: string, settingValue: string) {
+    const response = await api.put('/settings', {
+      setting_key: settingKey,
+      setting_value: settingValue
+    });
+    return response.data.data;
+  },
+
+  // 回测相关
+  async getBacktestResults(limit: number = 20) {
+    const params = { limit };
+    const response = await api.get('/backtest', { params });
+    return response.data.data;
+  },
+
+  async runBacktest(data: BacktestRequest): Promise<BacktestResult> {
+    const response = await api.post<ApiResponse<BacktestResult>>('/backtest/run', data);
+    return response.data.data;
+  },
+
+  // 导出相关
+  async exportData(data: ExportRequest): Promise<Blob> {
+    const response = await api.post('/export', data, {
+      responseType: 'blob'
+    });
+    return response.data;
+  },
+
+  // 健康检查
+  async healthCheck() {
+    const response = await api.get('/');
+    return response.data;
+  }
+};
+
+export default apiService;

@@ -1,0 +1,16 @@
+{
+  "test_time": "2025-07-22T09:15:04.860622",
+  "token_prefix": "2876ea85cb005fb5fa17",
+  "results": {
+    "基础连接": true,
+    "股票基础信息": true,
+    "日线数据": true,
+    "每日基本面": true,
+    "涨跌停统计": true,
+    "涨停明细": true,
+    "资金流向": true,
+    "龙虎榜": true,
+    "龙虎榜机构": true
+  },
+  "success_rate": 1.0
+}

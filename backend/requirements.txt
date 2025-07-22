@@ -1,0 +1,76 @@
+# FastAPI核心框架
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+starlette==0.27.0
+
+# 数据库相关
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# Redis缓存
+redis[hiredis]==5.0.1
+
+# 数据处理
+pandas>=2.1.0
+numpy>=1.26.0
+
+# Tushare API
+tushare==1.2.89
+
+# 定时任务
+APScheduler==3.10.4
+
+# 配置管理
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# HTTP客户端
+httpx==0.25.2
+aiohttp==3.9.1
+
+# 日期时间处理
+python-dateutil==2.8.2
+pytz==2023.3
+
+# 数据校验
+email-validator==2.1.0
+
+# 日志处理
+loguru==0.7.2
+
+# JSON处理
+orjson==3.9.10
+
+# 编码处理
+chardet==5.2.0
+
+# 环境变量
+python-dotenv==1.0.0
+
+# 开发和测试
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+
+# 代码格式化
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+
+# 类型提示
+mypy==1.7.1
+
+# 监控和性能
+prometheus-client==0.19.0
+
+# 安全相关
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+
+# 文件处理
+openpyxl==3.1.2
+xlsxwriter==3.1.9
+
+# 其他工具
+click==8.1.7
+rich==13.7.0
