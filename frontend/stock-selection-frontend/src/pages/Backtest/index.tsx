@@ -24,7 +24,8 @@ import {
   TrophyOutlined,
   FallOutlined,
   RiseOutlined,
-  PercentageOutlined
+  PercentageOutlined,
+  EyeOutlined
 } from '@ant-design/icons';
 import { Line } from '@ant-design/charts';
 import dayjs, { Dayjs } from 'dayjs';
@@ -32,6 +33,7 @@ import type { ColumnsType } from 'antd/es/table';
 import apiService from '../../services/api';
 import { handleError, formatPercent, formatDateTime } from '../../utils';
 import type { BacktestResult, BacktestRequest } from '../../types';
+import BacktestDetailModal from './BacktestDetailModal';
 
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -42,6 +44,8 @@ const Backtest: React.FC = () => {
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [selectedResult, setSelectedResult] = useState<BacktestResult | null>(null);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [detailBacktest, setDetailBacktest] = useState<BacktestResult | null>(null);
 
   // 模拟收益曲线数据
   const [performanceData, setPerformanceData] = useState<any[]>([]);
@@ -71,6 +75,7 @@ const Backtest: React.FC = () => {
   const generateMockPerformanceData = (result: BacktestResult) => {
     if (!result || !result.start_date || !result.end_date) {
       console.error('无效的回测结果数据');
+      setPerformanceData([]);
       return;
     }
     
@@ -78,64 +83,63 @@ const Backtest: React.FC = () => {
     const endDate = dayjs(result.end_date);
     const days = Math.max(1, endDate.diff(startDate, 'day'));
     
-    const data: any[] = [];
-    let strategyReturn = 0;
-    let benchmarkReturn = 0;
-    let maxReturn = 0;
-    let drawdown = 0;
-    
-    // 确保数值有效
+    // 确保数值有效的工具函数
     const safeNumber = (num: any, fallback: number = 0): number => {
+      if (num === null || num === undefined) return fallback;
       const parsed = Number(num);
-      return isNaN(parsed) ? fallback : parsed;
+      return isNaN(parsed) || !isFinite(parsed) ? fallback : parsed;
     };
     
     const totalReturn = safeNumber(result.total_return, 0.1);
     const maxDrawdown = safeNumber(result.max_drawdown, 0.05);
     
-    for (let i = 0; i <= days; i += 7) { // 每周一个点
+    const data: any[] = [];
+    let strategyReturn = 0;
+    let benchmarkReturn = 0;
+    let maxReturn = 0;
+    
+    // 生成数据点，确保每个点都有有效值
+    for (let i = 0; i <= Math.min(days, 100); i += Math.max(1, Math.floor(days / 50))) { // 限制数据点数量
       const date = startDate.add(i, 'day').format('YYYY-MM-DD');
       
-      // 模拟收益波动（确保数值有效）
+      // 模拟收益波动
       const randomFactor1 = Math.random();
       const randomFactor2 = Math.random();
       
-      const dailyStrategyReturn = (randomFactor1 - 0.45) * 0.02; // 策略收益略微正偏
-      const dailyBenchmarkReturn = (randomFactor2 - 0.52) * 0.015; // 基准收益较低
+      // 计算日收益（确保合理范围）
+      const dailyStrategyReturn = (randomFactor1 - 0.45) * 0.02;
+      const dailyBenchmarkReturn = (randomFactor2 - 0.52) * 0.015;
       
       strategyReturn += dailyStrategyReturn;
       benchmarkReturn += dailyBenchmarkReturn;
       
-      // 计算回撤（避免除零和NaN）
+      // 计算回撤
       if (strategyReturn > maxReturn) {
         maxReturn = strategyReturn;
-        drawdown = 0;
-      } else {
-        const denominator = (1 + maxReturn);
-        drawdown = denominator > 0 ? (maxReturn - strategyReturn) / denominator : 0;
       }
+      const currentDrawdown = maxReturn > 0 ? (maxReturn - strategyReturn) / (1 + maxReturn) : 0;
       
-      // 确保所有数值有效
-      const safeStrategyValue = safeNumber(strategyReturn * 100);
-      const safeBenchmarkValue = safeNumber(benchmarkReturn * 100);
-      const safeDrawdownValue = safeNumber(-drawdown * 100);
+      // 转换为百分比并确保数值有效
+      const strategyValue = safeNumber(strategyReturn * 100, 0);
+      const benchmarkValue = safeNumber(benchmarkReturn * 100, 0);
+      const drawdownValue = safeNumber(-currentDrawdown * 100, 0);
       
-      // 添加三条线的数据
+      // 添加数据点
       data.push(
         {
           date,
           type: '策略收益',
-          value: safeStrategyValue
+          value: strategyValue
         },
         {
           date,
           type: '基准收益',
-          value: safeBenchmarkValue
+          value: benchmarkValue
         },
         {
           date,
           type: '回撤',
-          value: safeDrawdownValue
+          value: drawdownValue
         }
       );
     }
@@ -143,11 +147,22 @@ const Backtest: React.FC = () => {
     // 确保最终收益匹配结果
     const finalStrategyData = data.filter(d => d.type === '策略收益');
     if (finalStrategyData.length > 0) {
-      finalStrategyData[finalStrategyData.length - 1].value = safeNumber(totalReturn * 100, 5);
+      const finalValue = safeNumber(totalReturn * 100, 5);
+      finalStrategyData[finalStrategyData.length - 1].value = finalValue;
     }
     
-    console.log('生成的性能数据:', data.slice(0, 5)); // 日志检查
-    setPerformanceData(data);
+    // 验证数据有效性
+    const validData = data.filter(d => 
+      d && 
+      typeof d.value === 'number' && 
+      isFinite(d.value) && 
+      !isNaN(d.value)
+    );
+    
+    console.log('生成的性能数据样本:', validData.slice(0, 6));
+    console.log('总数据点数:', validData.length);
+    
+    setPerformanceData(validData);
   };
 
   // 运行回测
@@ -178,6 +193,18 @@ const Backtest: React.FC = () => {
     } finally {
       setRunning(false);
     }
+  };
+
+  // 处理查看详情
+  const handleViewDetail = (record: BacktestResult) => {
+    setDetailBacktest(record);
+    setDetailModalVisible(true);
+  };
+
+  // 关闭详情弹窗
+  const handleCloseDetail = () => {
+    setDetailModalVisible(false);
+    setDetailBacktest(null);
   };
 
   // 回测结果表格列配置
@@ -294,6 +321,25 @@ const Backtest: React.FC = () => {
         <Text style={{ fontSize: '12px' }}>
           {formatDateTime(time)}
         </Text>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 80,
+      fixed: 'right',
+      render: (_, record) => (
+        <Button
+          type="link"
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleViewDetail(record);
+          }}
+        >
+          详情
+        </Button>
       ),
     },
   ];
@@ -442,7 +488,10 @@ const Backtest: React.FC = () => {
                 height={300}
                 meta={{
                   value: {
-                    formatter: (v: number) => `${v.toFixed(2)}%`,
+                    formatter: (v: number) => {
+                      const safeValue = Number(v);
+                      return isNaN(safeValue) || !isFinite(safeValue) ? '0.00%' : `${safeValue.toFixed(2)}%`;
+                    },
                   },
                 }}
                 color={['#f5222d', '#1890ff', '#52c41a']}
@@ -451,9 +500,11 @@ const Backtest: React.FC = () => {
                 }}
                 tooltip={{
                   formatter: (datum: any) => {
+                    const value = Number(datum.value);
+                    const safeValue = isNaN(value) || !isFinite(value) ? 0 : value;
                     return {
-                      name: datum.type,
-                      value: `${datum.value?.toFixed(2)}%`,
+                      name: datum.type || '未知',
+                      value: `${safeValue.toFixed(2)}%`,
                     };
                   },
                 }}
@@ -495,6 +546,13 @@ const Backtest: React.FC = () => {
           })}
         />
       </Card>
+
+      {/* 回测详细信息弹窗 */}
+      <BacktestDetailModal
+        visible={detailModalVisible}
+        backtest={detailBacktest}
+        onClose={handleCloseDetail}
+      />
     </div>
   );
 };

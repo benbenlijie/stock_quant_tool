@@ -22,6 +22,16 @@ const api = axios.create({
   }
 });
 
+// 创建回测引擎API实例
+const backtestApi = axios.create({
+  baseURL: 'https://zbhwqysllfettelcwynh.supabase.co/functions/v1/backtest-engine',
+  timeout: 300000, // 5分钟超时，回测可能需要较长时间
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpiaHdxeXNsbGZldHRlbGN3eW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMwOTM1NjAsImV4cCI6MjA2ODY2OTU2MH0.3axIXGwTGQl1OnQb327gZo0WpOyoc3G5Pz_EQvYAVuA'
+  }
+});
+
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
@@ -162,8 +172,65 @@ export const apiService = {
   },
 
   async runBacktest(data: BacktestRequest): Promise<BacktestResult> {
-    const response = await api.post<ApiResponse<BacktestResult>>('/backtest/run', data);
-    return response.data.data;
+    // 生成唯一的回测ID
+    const backtestId = `backtest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // 首先在数据库中创建回测记录
+    try {
+      const initResponse = await api.post('/backtest/init', {
+        backtest_id: backtestId,
+        start_date: data.startDate,
+        end_date: data.endDate,
+        initial_capital: data.initialCapital || 1000000,
+        strategy_name: '趋势跟踪策略',
+        strategy_params: data
+      });
+      
+      // 启动回测引擎
+      const engineResponse = await backtestApi.post('', {
+        action: 'run_backtest',
+        data: {
+          backtestId,
+          config: {
+            startDate: data.startDate,
+            endDate: data.endDate,
+            initialCapital: data.initialCapital || 1000000,
+            strategyParams: {
+              maxMarketCap: data.maxMarketCap || 500,
+              minTurnoverRate: data.minTurnoverRate || 2,
+              minVolumeRatio: data.minVolumeRatio || 1.5,
+              minDailyGain: data.minDailyGain || 3,
+              maxStockPrice: data.maxStockPrice || 100,
+              chipConcentrationThreshold: data.chipConcentrationThreshold || 0.6,
+              profitRatioThreshold: data.profitRatioThreshold || 0.5,
+              maxPositions: 10,
+              stopLoss: 10,
+              takeProfit: 20,
+              holdingDays: [3, 20]
+            }
+          }
+        }
+      });
+      
+      return engineResponse.data;
+      
+    } catch (error) {
+      console.error('回测失败:', error);
+      throw error;
+    }
+  },
+
+  // 新增：获取回测详细信息
+  async getBacktestDetail(backtestId: string): Promise<{
+    backtest: BacktestResult;
+    trades: any[];
+    dailyPerformance: any[];
+  }> {
+    const response = await backtestApi.post('', {
+      action: 'get_backtest_detail',
+      data: { backtestId }
+    });
+    return response.data;
   },
 
   // 导出相关

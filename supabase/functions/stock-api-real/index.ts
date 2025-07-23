@@ -1073,6 +1073,51 @@ Deno.serve(async (req) => {
       }
     }
 
+    // 初始化回测API
+    if (path === '/backtest/init' && method === 'POST') {
+      const requestData = await req.json();
+      
+      try {
+        const { error } = await supabase
+          .from('backtest_results')
+          .insert({
+            backtest_id: requestData.backtest_id,
+            start_date: requestData.start_date,
+            end_date: requestData.end_date,
+            initial_capital: requestData.initial_capital || 1000000,
+            strategy_name: requestData.strategy_name || '趋势跟踪策略',
+            strategy_params: requestData.strategy_params,
+            status: 'running'
+          });
+        
+        if (error) throw error;
+        
+        return new Response(JSON.stringify({
+          code: 200,
+          message: "回测初始化成功",
+          data: {
+            backtest_id: requestData.backtest_id,
+            status: 'initialized'
+          },
+          timestamp: getCurrentTimestamp()
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.error('回测初始化失败:', error);
+        return new Response(JSON.stringify({
+          code: 500,
+          message: "回测初始化失败",
+          data: null,
+          error: error.message,
+          timestamp: getCurrentTimestamp()
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // 导出数据API
     if (path === '/export' && method === 'POST') {
       return new Response(JSON.stringify({
