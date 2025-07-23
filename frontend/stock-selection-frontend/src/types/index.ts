@@ -70,6 +70,17 @@ export interface BacktestRequest {
   start_date: string;
   end_date: string;
   strategy_params?: Record<string, any>;
+  // Add missing properties that are used in api.ts
+  startDate?: string;
+  endDate?: string;
+  initialCapital?: number;
+  maxMarketCap?: number;
+  minTurnoverRate?: number;
+  minVolumeRatio?: number;
+  minDailyGain?: number;
+  maxStockPrice?: number;
+  chipConcentrationThreshold?: number;
+  profitRatioThreshold?: number;
 }
 
 export interface BacktestResult {
