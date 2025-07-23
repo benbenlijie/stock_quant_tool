@@ -348,6 +348,69 @@ const Settings: React.FC = () => {
           </Row>
         </Card>
 
+        {/* 高级阈值配置 */}
+        <Card title="高级阈值配置" style={{ marginBottom: 16 }}>
+          <Row gutter={[24, 16]}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="chip_concentration_threshold"
+                label={
+                  <Space>
+                    <span>筹码集中度阈值</span>
+                    <Tooltip title="筛选筹码集中度大于该值的股票（0-1）">
+                      <QuestionCircleOutlined />
+                    </Tooltip>
+                  </Space>
+                }
+                rules={[{ required: true, type: 'number', min: 0, max: 1 }]}
+              >
+                <Slider
+                  min={0.3}
+                  max={0.9}
+                  step={0.05}
+                  marks={{
+                    0.3: '30%',
+                    0.5: '50%',
+                    0.65: '65%',
+                    0.8: '80%',
+                    0.9: '90%',
+                  }}
+                  tooltip={{ formatter: (value) => `${(value * 100).toFixed(0)}%` }}
+                />
+              </Form.Item>
+            </Col>
+            
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="profit_ratio_threshold"
+                label={
+                  <Space>
+                    <span>获利盘比例阈值</span>
+                    <Tooltip title="筛选获利盘比例大于该值的股票（0-1）">
+                      <QuestionCircleOutlined />
+                    </Tooltip>
+                  </Space>
+                }
+                rules={[{ required: true, type: 'number', min: 0, max: 1 }]}
+              >
+                <Slider
+                  min={0.2}
+                  max={0.8}
+                  step={0.05}
+                  marks={{
+                    0.2: '20%',
+                    0.4: '40%',
+                    0.5: '50%',
+                    0.6: '60%',
+                    0.8: '80%',
+                  }}
+                  tooltip={{ formatter: (value) => `${(value * 100).toFixed(0)}%` }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Card>
+
         {/* 策略权重配置 */}
         <Card 
           title={

@@ -2,6 +2,49 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// 改进的筹码集中度计算函数
+function calculateImprovedChipConcentration(stock: any): [number, number] {
+  const turnoverRate = stock.turnover_rate || 5.0;
+  const volumeRatio = stock.volume_ratio || 1.0;
+  const pctChg = stock.pct_chg || 0.0;
+  
+  // 改进的集中度计算
+  let baseConcentration = 0.5;
+  
+  // 换手率因子：适度换手率最佳
+  const optimalTurnover = 8.0;
+  let turnoverFactor = 1.0 - Math.abs(turnoverRate - optimalTurnover) / 20.0;
+  turnoverFactor = Math.max(0.3, Math.min(1.2, turnoverFactor));
+  
+  // 量比因子：适度放量表示有资金介入
+  const volumeFactor = Math.min(1.3, Math.max(0.7, 0.8 + volumeRatio / 10));
+  
+  // 涨幅因子：适度上涨配合集中度
+  let priceFactor = 1.0;
+  if (pctChg >= 2 && pctChg <= 8) {
+    priceFactor = 1.1;
+  } else if (pctChg > 9) {
+    priceFactor = 1.2;
+  } else if (pctChg < -3) {
+    priceFactor = 0.9;
+  }
+  
+  // 综合计算集中度
+  let concentration = baseConcentration * turnoverFactor * volumeFactor * priceFactor;
+  concentration = Math.max(0.2, Math.min(0.95, concentration));
+  
+  // 获利盘估算
+  let profitRatio = 0.5;
+  if (pctChg > 0) {
+    profitRatio += Math.min(0.3, pctChg / 30);
+  } else {
+    profitRatio += Math.max(-0.3, pctChg / 20);
+  }
+  profitRatio = Math.max(0.1, Math.min(0.9, profitRatio));
+  
+  return [concentration, profitRatio];
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -243,8 +286,8 @@ Deno.serve(async (req) => {
             Math.min(100, stock.pct_chg * 10) * 0.3
           );
           
-          // 筹码集中度（简化计算）
-          const chipConcentration = Math.min(0.9, Math.max(0.3, stock.turnover_rate / 100 * 0.8));
+          // 筹码集中度（改进计算）
+          const [chipConcentration, profitRatio] = calculateImprovedChipConcentration(stock);
           const chipScore = chipConcentration * 100;
           
           // 题材分数（基于行业）
@@ -294,6 +337,7 @@ Deno.serve(async (req) => {
             amount: stock.amount,
             theme: theme,
             chip_concentration: Math.round(chipConcentration * 1000) / 1000,
+            profit_ratio: Math.round(profitRatio * 1000) / 1000,
             dragon_tiger_net_amount: 0
           };
         });

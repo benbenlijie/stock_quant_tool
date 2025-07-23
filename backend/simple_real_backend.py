@@ -15,6 +15,47 @@ import os
 # 添加当前目录到路径
 sys.path.insert(0, '/workspace/backend')
 
+def calculate_improved_chip_concentration(row) -> tuple[float, float]:
+    """改进的筹码集中度计算"""
+    turnover_rate = row.get('turnover_rate', 5.0)
+    volume_ratio = row.get('volume_ratio', 1.0)
+    pct_chg = row.get('pct_chg', 0.0)
+    
+    # 改进的集中度计算
+    base_concentration = 0.5
+    
+    # 换手率因子：适度换手率最佳
+    optimal_turnover = 8.0
+    turnover_factor = 1.0 - abs(turnover_rate - optimal_turnover) / 20.0
+    turnover_factor = max(0.3, min(1.2, turnover_factor))
+    
+    # 量比因子：适度放量表示有资金介入
+    volume_factor = min(1.3, max(0.7, 0.8 + volume_ratio / 10))
+    
+    # 涨幅因子：适度上涨配合集中度
+    price_factor = 1.0
+    if 2 <= pct_chg <= 8:
+        price_factor = 1.1
+    elif pct_chg > 9:
+        price_factor = 1.2
+    elif pct_chg < -3:
+        price_factor = 0.9
+    
+    # 综合计算集中度
+    concentration = base_concentration * turnover_factor * volume_factor * price_factor
+    concentration = max(0.2, min(0.95, concentration))
+    
+    # 获利盘估算
+    profit_ratio = 0.5
+    if pct_chg > 0:
+        profit_ratio += min(0.3, pct_chg / 30)
+    else:
+        profit_ratio += max(-0.3, pct_chg / 20)
+    
+    profit_ratio = max(0.1, min(0.9, profit_ratio))
+    
+    return concentration, profit_ratio
+
 try:
     import tushare as ts
     import pandas as pd
@@ -205,8 +246,12 @@ def run_stock_selection_strategy(data):
                     min(100, pct_chg * 10) * 0.3
                 )
                 
-                # 筹码集中度（简化计算）
-                chip_concentration = min(0.9, max(0.3, turnover_rate / 100 * 0.8))
+                # 筹码集中度（改进计算）
+                chip_concentration, profit_ratio = calculate_improved_chip_concentration({
+                    'turnover_rate': turnover_rate,
+                    'volume_ratio': volume_ratio,
+                    'pct_chg': pct_chg
+                })
                 chip_score = chip_concentration * 100
                 
                 # 题材分数（基于行业）
@@ -257,6 +302,7 @@ def run_stock_selection_strategy(data):
                     'amount': float(amount),
                     'theme': theme,
                     'chip_concentration': round(chip_concentration, 3),
+                'profit_ratio': round(profit_ratio, 3),
                     'dragon_tiger_net_amount': 0.0
                 }
                 

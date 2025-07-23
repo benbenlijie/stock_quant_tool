@@ -226,35 +226,132 @@ class StrategyEngine:
             raise
     
     async def _calculate_chip_concentration(self, data: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-        """计算筹码集中度"""
+        """计算筹码集中度 - 使用高级算法"""
         try:
-            # 简化的筹码集中度计算
-            # 实际应用中需要更复杂的历史成交分布计算
+            from .chip_concentration_calculator import ChipConcentrationCalculator
             
+            calculator = ChipConcentrationCalculator()
             chip_scores = []
+            profit_ratios = []
+            
             for _, row in data.iterrows():
-                # 基于换手率和量比的简化筹码集中度
-                # 高换手 + 高量比 = 筹码重新分布，集中度相对较高
-                concentration = min(0.9, 
-                    (row['turnover_rate'] / 100 * 0.6 + 
-                     row['volume_ratio'] / 10 * 0.4)
-                )
+                try:
+                    # 获取历史数据进行高级计算
+                    ts_code = row.get('ts_code', '')
+                    current_price = row.get('close', 0)
+                    
+                    # 尝试获取历史数据
+                    historical_data = await self._get_historical_data_for_chip_calc(ts_code, trade_date)
+                    
+                    if len(historical_data) >= 5:
+                        # 使用高级算法
+                        chip_metrics = calculator.calculate_chip_concentration(current_price, historical_data)
+                        concentration = chip_metrics['chip_concentration']
+                        profit_ratio = chip_metrics['profit_ratio']
+                        
+                        logger.debug(f"高级算法计算 {ts_code}: 集中度={concentration:.3f}, 获利盘={profit_ratio:.3f}")
+                    else:
+                        # 使用改进的简化算法
+                        concentration, profit_ratio = self._calculate_improved_simple_concentration(row)
+                        logger.debug(f"简化算法计算 {ts_code}: 集中度={concentration:.3f}, 获利盘={profit_ratio:.3f}")
+                    
+                except Exception as e:
+                    logger.warning(f"股票 {row.get('ts_code', 'unknown')} 筹码计算失败: {e}")
+                    # 使用改进的简化算法作为后备
+                    concentration, profit_ratio = self._calculate_improved_simple_concentration(row)
                 
-                # 确保在合理范围内
-                concentration = max(0.3, concentration)
                 chip_scores.append(concentration)
+                profit_ratios.append(profit_ratio)
             
+            # 添加计算结果到数据框
             data['chip_concentration'] = chip_scores
+            data['profit_ratio'] = profit_ratios
             
-            # 筛选筹码集中度高的股票
-            data = data[data['chip_concentration'] >= settings.chip_concentration_threshold]
+            # 双重筛选：筹码集中度 AND 获利盘比例
+            concentration_filter = data['chip_concentration'] >= settings.chip_concentration_threshold
+            profit_ratio_threshold = getattr(settings, 'profit_ratio_threshold', 0.5)
+            profit_filter = data['profit_ratio'] >= profit_ratio_threshold
             
-            logger.info(f"筹码集中度计算完成，剩余{len(data)}只股票")
-            return data
+            # 组合筛选条件
+            combined_filter = concentration_filter & profit_filter
+            filtered_data = data[combined_filter]
+            
+            logger.info(f"筹码集中度计算完成：")
+            logger.info(f"  - 集中度 >= {settings.chip_concentration_threshold}: {concentration_filter.sum()}只")
+            logger.info(f"  - 获利盘 >= {profit_ratio_threshold}: {profit_filter.sum()}只")
+            logger.info(f"  - 双重条件筛选后剩余: {len(filtered_data)}只股票")
+            
+            return filtered_data
             
         except Exception as e:
             logger.error(f"筹码集中度计算失败: {e}")
             raise
+    
+    def _calculate_improved_simple_concentration(self, row: pd.Series) -> tuple[float, float]:
+        """改进的简化筹码集中度计算"""
+        turnover_rate = row.get('turnover_rate', 5.0)
+        volume_ratio = row.get('volume_ratio', 1.0)
+        pct_chg = row.get('pct_chg', 0.0)
+        
+        # 改进的集中度计算
+        # 基础集中度：适度换手率表示筹码流动但不过度分散
+        base_concentration = 0.5
+        
+        # 换手率因子：过高过低都不好
+        optimal_turnover = 8.0  # 理想换手率
+        turnover_factor = 1.0 - abs(turnover_rate - optimal_turnover) / 20.0
+        turnover_factor = max(0.3, min(1.2, turnover_factor))
+        
+        # 量比因子：适度放量表示有资金介入
+        volume_factor = min(1.3, max(0.7, 0.8 + volume_ratio / 10))
+        
+        # 涨幅因子：适度上涨配合集中度
+        price_factor = 1.0
+        if 2 <= pct_chg <= 8:  # 适度上涨
+            price_factor = 1.1
+        elif pct_chg > 9:  # 涨停附近
+            price_factor = 1.2
+        elif pct_chg < -3:  # 下跌过多
+            price_factor = 0.9
+        
+        # 综合计算集中度
+        concentration = base_concentration * turnover_factor * volume_factor * price_factor
+        concentration = max(0.2, min(0.95, concentration))
+        
+        # 获利盘估算：基于涨幅和趋势
+        profit_ratio = 0.5  # 基础50%
+        if pct_chg > 0:
+            profit_ratio += min(0.3, pct_chg / 30)  # 上涨增加获利盘
+        else:
+            profit_ratio += max(-0.3, pct_chg / 20)  # 下跌减少获利盘
+        
+        profit_ratio = max(0.1, min(0.9, profit_ratio))
+        
+        return concentration, profit_ratio
+    
+    async def _get_historical_data_for_chip_calc(self, ts_code: str, trade_date: str) -> pd.DataFrame:
+        """获取用于筹码计算的历史数据"""
+        try:
+            if not hasattr(self, 'tushare_client') or not self.tushare_client:
+                return pd.DataFrame()
+            
+            # 获取60天历史数据
+            end_date = trade_date
+            df = self.tushare_client.daily_basic(
+                ts_code=ts_code,
+                end_date=end_date,
+                fields='ts_code,trade_date,close,volume,turnover_rate'
+            )
+            
+            if df is not None and len(df) > 0:
+                df['date'] = pd.to_datetime(df['trade_date'])
+                df = df.sort_values('date')
+                return df.tail(60)  # 最近60天
+            
+        except Exception as e:
+            logger.debug(f"获取历史数据失败 {ts_code}: {e}")
+        
+        return pd.DataFrame()
     
     def _analyze_dragon_tiger(self, data: pd.DataFrame, top_list: pd.DataFrame) -> pd.DataFrame:
         """分析龙虎榜资金"""

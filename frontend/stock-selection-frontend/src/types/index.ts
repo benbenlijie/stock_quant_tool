@@ -17,6 +17,7 @@ export interface StockInfo {
 export interface CandidateStock extends StockInfo {
   theme?: string;
   chip_concentration?: number;
+  profit_ratio?: number;
   dragon_tiger_net_amount?: number;
 }
 
@@ -61,8 +62,8 @@ export interface StrategySettings {
   min_volume_ratio: number;
   min_daily_gain: number;
   max_stock_price: number;
-  chip_concentration_threshold: number;
-  profit_ratio_threshold: number;
+      chip_concentration_threshold: number;
+    profit_ratio_threshold: number;
 }
 
 export interface BacktestRequest {
