@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   Tabs,
@@ -11,7 +11,9 @@ import {
   Row,
   Col,
   Statistic,
-  Timeline
+  Timeline,
+  Spin,
+  Alert
 } from 'antd';
 import {
   RiseOutlined,
@@ -23,6 +25,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { BacktestResult } from '../../types';
 import { formatPercent, formatCurrency, formatDateTime, getChangeColor } from '../../utils';
+import apiService from '../../services/api';
 
 const { Title, Text } = Typography;
 
@@ -56,7 +59,94 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
   backtest,
   onClose
 }) => {
+  const [loading, setLoading] = useState(false);
+  const [detailData, setDetailData] = useState<{
+    trades: any[];
+    dailyPerformance: any[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // 加载详细数据
+  useEffect(() => {
+    if (visible && backtest && backtest.backtest_id) {
+      loadDetailData();
+    }
+  }, [visible, backtest]);
+
+  const loadDetailData = async () => {
+    if (!backtest?.backtest_id) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await apiService.getBacktestDetail(backtest.backtest_id);
+      setDetailData({
+        trades: response.trades || [],
+        dailyPerformance: response.dailyPerformance || []
+      });
+    } catch (err) {
+      console.error('加载回测详情失败:', err);
+      setError('加载回测详情失败，请稍后重试');
+      // 如果API失败，使用模拟数据
+      setDetailData({
+        trades: generateMockTrades(),
+        dailyPerformance: []
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!backtest) return null;
+
+  // 生成模拟交易数据（作为fallback）
+  const generateMockTrades = (): TradeRecord[] => {
+    const mockTrades: TradeRecord[] = [];
+    const stocks = [
+      { code: '000001.SZ', name: '平安银行' },
+      { code: '300015.SZ', name: '爱尔眼科' },
+      { code: '002594.SZ', name: '比亚迪' },
+      { code: '000858.SZ', name: '五粮液' },
+      { code: '002415.SZ', name: '汤臣倍健' }
+    ];
+
+    stocks.forEach((stock, index) => {
+      const buyPrice = 10 + Math.random() * 50;
+      const sellPrice = buyPrice * (0.9 + Math.random() * 0.2);
+      const quantity = Math.floor(Math.random() * 10 + 1) * 100;
+
+      // 买入记录
+      mockTrades.push({
+        trade_id: `T${Date.now()}_${index}_buy`,
+        stock_code: stock.code,
+        stock_name: stock.name,
+        action: 'buy',
+        price: buyPrice,
+        quantity: quantity,
+        amount: buyPrice * quantity,
+        trade_date: new Date(Date.now() - (stocks.length - index) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        reason: '符合选股条件',
+        profit_loss: 0
+      });
+
+      // 卖出记录
+      mockTrades.push({
+        trade_id: `T${Date.now()}_${index}_sell`,
+        stock_code: stock.code,
+        stock_name: stock.name,
+        action: 'sell',
+        price: sellPrice,
+        quantity: quantity,
+        amount: sellPrice * quantity,
+        trade_date: new Date(Date.now() - (stocks.length - index - 1) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        reason: sellPrice > buyPrice ? '达到止盈目标' : '达到止损线',
+        profit_loss: (sellPrice - buyPrice) * quantity
+      });
+    });
+
+    return mockTrades.sort((a, b) => new Date(a.trade_date).getTime() - new Date(b.trade_date).getTime());
+  };
 
   // 模拟策略参数数据
   const strategyParams: StrategyParam[] = [
@@ -149,31 +239,14 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
       trade_date: '2024-01-22 11:30:00',
       reason: '达到止损线',
       profit_loss: -1071
-    },
-    {
-      trade_id: 'T005',
-      stock_code: '002594.SZ',
-      stock_name: '比亚迪',
-      action: 'buy',
-      price: 268.50,
-      quantity: 50,
-      amount: 13425,
-      trade_date: '2024-01-25 09:45:00',
-      reason: '新能源概念+资金流入'
-    },
-    {
-      trade_id: 'T006',
-      stock_code: '002594.SZ',
-      stock_name: '比亚迪',
-      action: 'sell',
-      price: 289.75,
-      quantity: 50,
-      amount: 14487.5,
-      trade_date: '2024-01-29 15:00:00',
-      reason: '达到止盈目标',
-      profit_loss: 1062.5
     }
   ];
+
+  // 计算交易统计数据
+  const trades = detailData?.trades || tradeRecords;
+  const sellTrades = trades.filter((trade: any) => trade.action === 'sell' && trade.profit_loss !== undefined);
+  const totalProfit = sellTrades.filter((trade: any) => (trade.profit_loss || 0) > 0).reduce((sum: number, trade: any) => sum + (trade.profit_loss || 0), 0);
+  const totalLoss = sellTrades.filter((trade: any) => (trade.profit_loss || 0) < 0).reduce((sum: number, trade: any) => sum + (trade.profit_loss || 0), 0);
 
   // 交易记录表格列配置
   const tradeColumns: ColumnsType<TradeRecord> = [
@@ -260,11 +333,8 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
     }
   ];
 
-  // 计算盈亏分布
-  const profitTrades = tradeRecords.filter(t => t.profit_loss && t.profit_loss > 0);
-  const lossTrades = tradeRecords.filter(t => t.profit_loss && t.profit_loss < 0);
-  const totalProfit = profitTrades.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
-  const totalLoss = lossTrades.reduce((sum, t) => sum + (t.profit_loss || 0), 0);
+  // 重新定义tradeRecords（保持向后兼容）
+  const tradeRecords = detailData?.trades || generateMockTrades();
 
   const tabItems = [
     {
@@ -437,9 +507,23 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
           </Row>
 
           {/* 交易记录表格 */}
+          {loading ? (
+            <Spin tip="加载交易记录中...">
+              <div style={{ minHeight: 200 }} />
+            </Spin>
+          ) : error ? (
+            <Alert 
+              message="加载失败" 
+              description={error} 
+              type="warning" 
+              showIcon 
+              style={{ marginBottom: 16 }}
+            />
+          ) : null}
+          
           <Table
             columns={tradeColumns}
-            dataSource={tradeRecords}
+            dataSource={detailData?.trades || generateMockTrades()}
             rowKey="trade_id"
             size="small"
             scroll={{ x: 800 }}
@@ -449,6 +533,7 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
               showQuickJumper: true,
               showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条`,
             }}
+            loading={loading}
           />
         </Space>
       )
