@@ -41,7 +41,9 @@ export interface DashboardData {
   recent_performance: {
     last_update: string;
     data_status: string;
+    trade_date?: string;
     data_source?: string;
+    error_info?: string | null;
   };
   update_time: string;
 }
@@ -83,6 +85,8 @@ export interface BacktestResult {
   created_at: string;
   data_source?: string;
   error_message?: string;
+  initial_capital?: number;
+  final_value?: number;
 }
 
 export interface ExportRequest {

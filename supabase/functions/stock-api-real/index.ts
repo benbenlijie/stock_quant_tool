@@ -1,5 +1,7 @@
 // A股量化选股系统API服务 - 真实数据版本修复版
 
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
 Deno.serve(async (req) => {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -27,6 +29,12 @@ Deno.serve(async (req) => {
     
     const method = req.method;
     console.log(`API请求: ${method} ${path}`);
+
+    // 初始化Supabase客户端
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') || 'https://zbhwqysllfettelcwynh.supabase.co'
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')
+    
+    const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
     // Tushare API配置
     const TUSHARE_TOKEN = Deno.env.get('TUSHARE_TOKEN') || '2876ea85cb005fb5fa17c809a98174f2d5aae8b1f830110a5ead6211';
@@ -469,6 +477,65 @@ Deno.serve(async (req) => {
       });
     }
 
+    // 批量策略设置更新API
+    if (path === '/strategy/config' && method === 'PUT') {
+      try {
+        const requestData = await req.json();
+        const configUpdates = requestData.config_updates || requestData;
+        
+        console.log('策略配置更新请求:', configUpdates)
+        
+        // 准备批量更新数据
+        const upsertData = []
+        for (const [key, value] of Object.entries(configUpdates)) {
+          upsertData.push({
+            setting_key: key,
+            setting_value: value.toString(),
+            updated_at: new Date().toISOString()
+          })
+        }
+        
+        // 执行数据库更新
+        const { data, error } = await supabase
+          .from('user_settings')
+          .upsert(upsertData, {
+            onConflict: 'setting_key'
+          })
+          .select()
+        
+        if (error) {
+          console.error('策略配置更新失败:', error)
+          throw error
+        }
+        
+        console.log('策略配置更新成功:', data)
+        
+        return new Response(JSON.stringify({
+          code: 200,
+          message: "策略配置更新成功",
+          data: {
+            updated_config: configUpdates,
+            updated_count: Object.keys(configUpdates).length,
+            updated_at: getCurrentTimestamp()
+          },
+          timestamp: getCurrentTimestamp()
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      } catch (error) {
+        console.error('策略配置更新错误:', error)
+        return new Response(JSON.stringify({
+          code: 500,
+          message: "策略配置更新失败",
+          data: null,
+          timestamp: getCurrentTimestamp()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+    }
+    
     // 策略重新计算API
     if (path === '/strategy/recompute' && method === 'POST') {
       const targetDate = getTradeDate();
@@ -504,48 +571,141 @@ Deno.serve(async (req) => {
 
     // 设置API
     if (path === '/settings' && method === 'GET') {
-      return new Response(JSON.stringify({
-        code: 200,
-        message: "获取设置成功",
-        data: {
-          settings: {
-            max_market_cap: "100",
-            min_turnover_rate: "3",
-            min_volume_ratio: "1.2",
-            min_daily_gain: "3",
-            max_stock_price: "200",
-            chip_concentration_threshold: "0.3",
-            profit_ratio_threshold: "0.5",
-            volume_price_weight: "30",
-            chip_weight: "25",
-            dragon_tiger_weight: "20",
-            theme_weight: "15",
-            money_flow_weight: "10"
+      try {
+        const { data: settingsData, error } = await supabase
+          .from('user_settings')
+          .select('setting_key, setting_value')
+        
+        if (error) {
+          console.error('获取设置失败:', error)
+          throw error
+        }
+        
+        const settings = {}
+        settingsData?.forEach(item => {
+          settings[item.setting_key] = item.setting_value
+        })
+        
+        return new Response(JSON.stringify({
+          code: 200,
+          message: "获取设置成功",
+          data: {
+            settings: settings,
+            count: settingsData?.length || 0
           },
-          count: 11
-        },
-        timestamp: getCurrentTimestamp()
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+          timestamp: getCurrentTimestamp()
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      } catch (error) {
+        console.error('获取设置错误:', error)
+        return new Response(JSON.stringify({
+          code: 500,
+          message: "获取设置失败",
+          data: null,
+          timestamp: getCurrentTimestamp()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
     }
 
-    // 设置更新API
+    // 设置更新API - 支持单个和批量更新
     if (path === '/settings' && method === 'PUT') {
-      const requestData = await req.json();
-      
-      return new Response(JSON.stringify({
-        code: 200,
-        message: "设置更新成功",
-        data: {
-          setting_key: requestData.setting_key,
-          setting_value: requestData.setting_value,
-          updated_at: getCurrentTimestamp()
-        },
-        timestamp: getCurrentTimestamp()
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+      try {
+        const requestData = await req.json();
+        
+        // 判断是单个设置还是批量设置
+        if (requestData.setting_key && requestData.setting_value !== undefined) {
+          // 单个设置更新
+          const { error } = await supabase
+            .from('user_settings')
+            .upsert({
+              setting_key: requestData.setting_key,
+              setting_value: requestData.setting_value.toString(),
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'setting_key'
+            })
+          
+          if (error) {
+            console.error('更新设置失败:', error)
+            throw error
+          }
+          
+          return new Response(JSON.stringify({
+            code: 200,
+            message: "设置更新成功",
+            data: {
+              setting_key: requestData.setting_key,
+              setting_value: requestData.setting_value,
+              updated_at: getCurrentTimestamp()
+            },
+            timestamp: getCurrentTimestamp()
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        } else if (requestData.settings) {
+          // 批量设置更新
+          const updatedSettings = {}
+          const upsertData = []
+          
+          for (const [key, value] of Object.entries(requestData.settings)) {
+            updatedSettings[key] = value
+            upsertData.push({
+              setting_key: key,
+              setting_value: value.toString(),
+              updated_at: new Date().toISOString()
+            })
+          }
+          
+          const { error } = await supabase
+            .from('user_settings')
+            .upsert(upsertData, {
+              onConflict: 'setting_key'
+            })
+          
+          if (error) {
+            console.error('批量更新设置失败:', error)
+            throw error
+          }
+          
+          return new Response(JSON.stringify({
+            code: 200,
+            message: "批量设置更新成功",
+            data: {
+              updated_settings: updatedSettings,
+              updated_count: Object.keys(updatedSettings).length,
+              updated_at: getCurrentTimestamp()
+            },
+            timestamp: getCurrentTimestamp()
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        } else {
+          return new Response(JSON.stringify({
+            code: 400,
+            message: "无效的请求参数",
+            data: null,
+            timestamp: getCurrentTimestamp()
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          })
+        }
+      } catch (error) {
+        console.error('设置更新错误:', error)
+        return new Response(JSON.stringify({
+          code: 500,
+          message: "设置更新失败",
+          data: null,
+          timestamp: getCurrentTimestamp()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
     }
 
     // 回测结果API

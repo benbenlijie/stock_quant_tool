@@ -15,7 +15,7 @@ import type {
 // 创建axios实例 - 真实数据版本
 const api = axios.create({
   baseURL: 'https://zbhwqysllfettelcwynh.supabase.co/functions/v1/stock-api-real',
-  timeout: 30000,
+  timeout: 60000,
   headers: {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpiaHdxeXNsbGZldHRlbGN3eW5oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMwOTM1NjAsImV4cCI6MjA2ODY2OTU2MH0.3axIXGwTGQl1OnQb327gZo0WpOyoc3G5Pz_EQvYAVuA'
@@ -40,6 +40,7 @@ api.interceptors.response.use(
     
     // 检查业务状态码
     if (data.code !== 200) {
+      console.error('API业务错误:', data);
       message.error(data.message || '请求失败');
       return Promise.reject(new Error(data.message));
     }
@@ -47,7 +48,19 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    const errorMessage = error.response?.data?.detail || error.message || '网络错误';
+    console.error('API网络错误:', error);
+    let errorMessage;
+    
+    if (error.code === 'ECONNABORTED') {
+      errorMessage = '请求超时，请检查网络连接';
+    } else if (error.response) {
+      errorMessage = error.response?.data?.message || error.response?.data?.detail || `服务器错误 (${error.response.status})`;
+    } else if (error.request) {
+      errorMessage = '网络连接失败，请检查网络设置';
+    } else {
+      errorMessage = error.message || '未知错误';
+    }
+    
     message.error(errorMessage);
     return Promise.reject(error);
   }
@@ -130,6 +143,13 @@ export const apiService = {
     const response = await api.put('/settings', {
       setting_key: settingKey,
       setting_value: settingValue
+    });
+    return response.data.data;
+  },
+
+  async updateSettingsBatch(settings: Record<string, any>) {
+    const response = await api.put('/settings', {
+      settings: settings
     });
     return response.data.data;
   },

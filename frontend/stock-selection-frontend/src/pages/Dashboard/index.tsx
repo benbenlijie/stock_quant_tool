@@ -109,7 +109,7 @@ const Dashboard: React.FC = () => {
       });
       
       // 根据数据源显示不同的成功信息
-      if (result.data_source === 'tushare') {
+      if (result.recent_performance?.data_source === 'tushare') {
         message.success('重新计算完成（真实数据）');
       } else {
         message.warning('重新计算完成（演示数据）');
