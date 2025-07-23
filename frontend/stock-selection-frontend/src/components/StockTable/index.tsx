@@ -72,6 +72,15 @@ const ExpandedRowContent: React.FC<ExpandedRowProps> = ({ record }) => {
               />
             </div>
             <div>
+              <Text type="secondary">获利盘比例: </Text>
+              <Progress
+                percent={(record.profit_ratio || 0.5) * 100}
+                size="small"
+                strokeColor={record.profit_ratio && record.profit_ratio > 0.5 ? '#52c41a' : '#faad14'}
+                format={(percent) => `${percent?.toFixed(1)}%`}
+              />
+            </div>
+            <div>
               <Text type="secondary">量比: </Text>
               <Tag color={record.volume_ratio > 3 ? 'red' : record.volume_ratio > 2 ? 'orange' : 'blue'}>
                 {record.volume_ratio.toFixed(2)}
@@ -215,6 +224,21 @@ const StockTable: React.FC<StockTableProps> = ({ data, loading = false, paginati
           percent={(concentration || 0.65) * 100}
           size="small"
           strokeColor={concentration && concentration > 0.65 ? '#52c41a' : '#faad14'}
+          format={(percent) => `${percent?.toFixed(1)}%`}
+        />
+      ),
+    },
+    {
+      title: '获利盘比例',
+      dataIndex: 'profit_ratio',
+      key: 'profit_ratio',
+      width: 120,
+      sorter: (a, b) => (a.profit_ratio || 0) - (b.profit_ratio || 0),
+      render: (profitRatio: number) => (
+        <Progress
+          percent={(profitRatio || 0.5) * 100}
+          size="small"
+          strokeColor={profitRatio && profitRatio > 0.5 ? '#52c41a' : '#faad14'}
           format={(percent) => `${percent?.toFixed(1)}%`}
         />
       ),
