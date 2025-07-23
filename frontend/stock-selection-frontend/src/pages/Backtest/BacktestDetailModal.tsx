@@ -193,7 +193,7 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
   ];
 
   // 模拟交易记录数据
-  const tradeRecords: TradeRecord[] = [
+  const mockTradeRecords: TradeRecord[] = [
     {
       trade_id: 'T001',
       stock_code: '000001.SZ',
@@ -243,10 +243,12 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
   ];
 
   // 计算交易统计数据
-  const trades = detailData?.trades || tradeRecords;
+  const trades = detailData?.trades || mockTradeRecords;
   const sellTrades = trades.filter((trade: any) => trade.action === 'sell' && trade.profit_loss !== undefined);
   const totalProfit = sellTrades.filter((trade: any) => (trade.profit_loss || 0) > 0).reduce((sum: number, trade: any) => sum + (trade.profit_loss || 0), 0);
   const totalLoss = sellTrades.filter((trade: any) => (trade.profit_loss || 0) < 0).reduce((sum: number, trade: any) => sum + (trade.profit_loss || 0), 0);
+  const profitTrades = sellTrades.filter((trade: any) => (trade.profit_loss || 0) > 0);
+  const lossTrades = sellTrades.filter((trade: any) => (trade.profit_loss || 0) < 0);
 
   // 交易记录表格列配置
   const tradeColumns: ColumnsType<TradeRecord> = [
@@ -333,8 +335,8 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
     }
   ];
 
-  // 重新定义tradeRecords（保持向后兼容）
-  const tradeRecords = detailData?.trades || generateMockTrades();
+  // 获取最终的交易记录数据（保持向后兼容）
+  const finalTradeRecords = detailData?.trades || generateMockTrades();
 
   const tabItems = [
     {
@@ -545,7 +547,7 @@ const BacktestDetailModal: React.FC<BacktestDetailModalProps> = ({
         <Card title="交易时间线">
           <Timeline
             mode="left"
-            items={tradeRecords.map((trade, index) => ({
+            items={finalTradeRecords.map((trade, index) => ({
               label: formatDateTime(trade.trade_date),
               children: (
                 <Space direction="vertical" size={0}>
