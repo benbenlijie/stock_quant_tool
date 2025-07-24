@@ -754,47 +754,75 @@ Deno.serve(async (req) => {
 
     // 回测结果API
     if (path === '/backtest' && method === 'GET') {
-      // 生成模拟回测结果数据
-      const mockResults = [
-        {
-          backtest_id: 'bt_001',
-          start_date: '2024-01-01',
-          end_date: '2024-07-22',
-          status: 'completed',
-          total_return: 0.245,
-          annual_return: 0.298,
-          max_drawdown: 0.087,
-          sharpe_ratio: 1.42,
-          win_rate: 0.685,
-          total_trades: 87,
-          created_at: '2024-07-22T09:00:00Z'
-        },
-        {
-          backtest_id: 'bt_002',
-          start_date: '2024-03-01',
-          end_date: '2024-07-22',
-          status: 'completed',
-          total_return: 0.156,
-          annual_return: 0.203,
-          max_drawdown: 0.052,
-          sharpe_ratio: 1.68,
-          win_rate: 0.724,
-          total_trades: 54,
-          created_at: '2024-07-22T10:00:00Z'
+      try {
+        const url = new URL(req.url);
+        const limit = parseInt(url.searchParams.get('limit') || '20');
+        const offset = parseInt(url.searchParams.get('offset') || '0');
+        
+        // 从数据库获取回测结果
+        const { data: results, error } = await supabase
+          .from('backtest_results')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        
+        if (error) {
+          console.error('获取回测结果失败:', error);
+          // 返回模拟数据作为降级
+          const mockResults = [
+            {
+              backtest_id: 'bt_demo_001',
+              start_date: '2024-01-01',
+              end_date: '2024-07-22',
+              status: 'completed',
+              total_return: 0.245,
+              annual_return: 0.298,
+              max_drawdown: 0.087,
+              sharpe_ratio: 1.42,
+              win_rate: 0.685,
+              total_trades: 87,
+              data_source: 'mock_demo',
+              created_at: '2024-07-22T09:00:00Z'
+            }
+          ];
+          
+          return new Response(JSON.stringify({
+            code: 200,
+            message: "获取回测结果成功（模拟数据）",
+            data: {
+              results: mockResults,
+              total_count: mockResults.length
+            },
+            timestamp: getCurrentTimestamp()
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
         }
-      ];
-      
-      return new Response(JSON.stringify({
-        code: 200,
-        message: "获取回测结果成功",
-        data: {
-          results: mockResults,
-          total_count: mockResults.length
-        },
-        timestamp: getCurrentTimestamp()
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
+        
+        return new Response(JSON.stringify({
+          code: 200,
+          message: "获取回测结果成功",
+          data: {
+            results: results || [],
+            total_count: results?.length || 0
+          },
+          timestamp: getCurrentTimestamp()
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.error('获取回测结果错误:', error);
+        return new Response(JSON.stringify({
+          code: 500,
+          message: "获取回测结果失败",
+          data: null,
+          timestamp: getCurrentTimestamp()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // 真实历史回测函数
@@ -1008,6 +1036,36 @@ Deno.serve(async (req) => {
         
         console.log(`回测完成 - 总收益率: ${(totalReturn * 100).toFixed(2)}%, 最大回撤: ${(maxDrawdown * 100).toFixed(2)}%, 交易次数: ${tradeCount}`);
         
+        // Save backtest result to database
+        try {
+          const { error: insertError } = await supabase
+            .from('backtest_results')
+            .insert({
+              backtest_id: result.backtest_id,
+              strategy_name: '趋势跟踪策略',
+              start_date: startDate,
+              end_date: endDate,
+              initial_capital: params.initial_capital,
+              total_return: totalReturn,
+              annual_return: annualReturn,
+              max_drawdown: maxDrawdown,
+              sharpe_ratio: sharpeRatio,
+              win_rate: winRate,
+              total_trades: tradeCount,
+              parameters: JSON.stringify(params),
+              status: 'completed',
+              data_source: 'real_backtest'
+            });
+          
+          if (insertError) {
+            console.error('保存回测结果失败:', insertError);
+          } else {
+            console.log('回测结果已保存到数据库');
+          }
+        } catch (saveError) {
+          console.error('保存回测结果出错:', saveError);
+        }
+        
         return result;
         
       } catch (error) {
@@ -1021,7 +1079,36 @@ Deno.serve(async (req) => {
       const requestData = await req.json();
       
       try {
-        console.log('开始真实回测计算...');
+        console.log('开始真实回测计算...', requestData);
+        
+        // 验证输入参数
+        if (!requestData.start_date || !requestData.end_date) {
+          return new Response(JSON.stringify({
+            code: 400,
+            message: "缺少必要的回测参数：start_date 和 end_date",
+            data: null,
+            timestamp: getCurrentTimestamp()
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        // 验证日期格式
+        const startDateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        const endDateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        
+        if (!startDateRegex.test(requestData.start_date) || !endDateRegex.test(requestData.end_date)) {
+          return new Response(JSON.stringify({
+            code: 400,
+            message: "日期格式错误，请使用 YYYY-MM-DD 格式",
+            data: null,
+            timestamp: getCurrentTimestamp()
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         
         // 运行真实回测
         const result = await runRealBacktest(
@@ -1061,6 +1148,36 @@ Deno.serve(async (req) => {
           data_source: 'mock_due_to_error',
           error_message: error.message
         };
+        
+        // Save mock backtest result to database
+        try {
+          const { error: insertError } = await supabase
+            .from('backtest_results')
+            .insert({
+              backtest_id: mockResult.backtest_id,
+              strategy_name: '趋势跟踪策略',
+              start_date: requestData.start_date,
+              end_date: requestData.end_date,
+              initial_capital: 1000000.00,
+              total_return: mockResult.total_return,
+              annual_return: mockResult.annual_return,
+              max_drawdown: mockResult.max_drawdown,
+              sharpe_ratio: mockResult.sharpe_ratio,
+              win_rate: mockResult.win_rate,
+              total_trades: mockResult.total_trades,
+              parameters: JSON.stringify({ error: error.message }),
+              status: 'completed',
+              data_source: 'mock_due_to_error'
+            });
+          
+          if (insertError) {
+            console.error('保存模拟回测结果失败:', insertError);
+          } else {
+            console.log('模拟回测结果已保存到数据库');
+          }
+        } catch (saveError) {
+          console.error('保存模拟回测结果出错:', saveError);
+        }
         
         return new Response(JSON.stringify({
           code: 200,
