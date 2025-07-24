@@ -55,7 +55,7 @@ class StrategyEngine:
     
     def __init__(self, db_ops: DatabaseOperations):
         self.db_ops = db_ops
-        self.tushare = TushareService()
+        self.tushare = TushareService(cache_ttl=1800)  # 30分钟缓存
         
     async def run_daily_strategy(self, trade_date: str = None) -> List[CandidateStock]:
         """运行每日选股策略"""
