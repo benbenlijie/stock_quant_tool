@@ -4,17 +4,245 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // 筹码分布数据结构
 interface ChipDistribution {
-  [price: number]: number; // 价格 -> 成交量权重
+  prices: number[];      // 价格刻度
+  volumes: number[];     // 对应的筹码量
+}
+
+// 历史数据接口
+interface HistoricalData {
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+  turnover_rate?: number;
+  vwap?: number;
+}
+
+// 基于换手率递推法的筹码分布计算器
+class ChipDistributionCalculator {
+  private priceStep: number = 0.01; // 价格分桶步长
+  
+  constructor(priceStep: number = 0.01) {
+    this.priceStep = priceStep;
+  }
+  
+  // 主要计算函数：换手率递推法
+  calculateChipDistribution(historicalData: HistoricalData[]): ChipDistribution | null {
+    if (!historicalData || historicalData.length < 3) {
+      return null;
+    }
+    
+    // 1. 初始化价格分桶
+    const globalLow = Math.min(...historicalData.map(d => d.low));
+    const globalHigh = Math.max(...historicalData.map(d => d.high));
+    
+    // 扩展价格范围
+    const priceRange = globalHigh - globalLow;
+    const extendedLow = globalLow - priceRange * 0.1;
+    const extendedHigh = globalHigh + priceRange * 0.1;
+    
+    const prices = this.initPriceBins(extendedLow, extendedHigh);
+    let chipDistribution = new Array(prices.length).fill(0);
+    
+    // 2. 估算流通股本
+    const floatShares = this.estimateFloatShares(historicalData[0]);
+    
+    // 3. 初始分布：第一天所有筹码按价格区间分布
+    const firstDay = historicalData[0];
+    const firstVwap = this.computeVwap(firstDay);
+    chipDistribution = this.distributeVolumeTriangle(
+      chipDistribution, prices, firstDay.low, firstDay.high, firstVwap, floatShares
+    );
+    
+    // 4. 递推计算每日筹码分布
+    for (let i = 1; i < historicalData.length; i++) {
+      const dayData = historicalData[i];
+      
+      // 计算换手率
+      let turnoverRate = dayData.turnover_rate || 0;
+      if (turnoverRate <= 0) {
+        // 通过成交量估算换手率
+        turnoverRate = Math.min(1.0, dayData.volume / floatShares);
+      }
+      
+      // 限制换手率在合理范围
+      turnoverRate = Math.max(0.001, Math.min(1.0, turnoverRate));
+      
+      // 步骤1：旧筹码衰减
+      const retentionRate = 1.0 - turnoverRate;
+      chipDistribution = chipDistribution.map(vol => vol * retentionRate);
+      
+      // 步骤2：新筹码注入
+      if (dayData.volume > 0) {
+        const vwap = this.computeVwap(dayData);
+        chipDistribution = this.distributeVolumeTriangle(
+          chipDistribution, prices, dayData.low, dayData.high, vwap, dayData.volume
+        );
+      }
+      
+      // 步骤3：归一化（防止累积误差）
+      const totalVolume = chipDistribution.reduce((sum, vol) => sum + vol, 0);
+      if (totalVolume > 0) {
+        const scaleFactor = floatShares / totalVolume;
+        chipDistribution = chipDistribution.map(vol => vol * scaleFactor);
+      }
+    }
+    
+    return { prices, volumes: chipDistribution };
+  }
+  
+  // 初始化价格分桶
+  private initPriceBins(minPrice: number, maxPrice: number): number[] {
+    const prices: number[] = [];
+    let price = minPrice;
+    while (price <= maxPrice) {
+      prices.push(Math.round(price * 100) / 100);
+      price += this.priceStep;
+    }
+    return prices;
+  }
+  
+  // 三角分布：以VWAP为中心分配成交量
+  private distributeVolumeTriangle(
+    distribution: number[], prices: number[], 
+    low: number, high: number, vwap: number, volume: number
+  ): number[] {
+    if (high <= low || volume <= 0) {
+      return distribution;
+    }
+    
+    // 找到价格区间内的桶索引
+    const validIndices: number[] = [];
+    for (let i = 0; i < prices.length; i++) {
+      if (prices[i] >= low && prices[i] <= high) {
+        validIndices.push(i);
+      }
+    }
+    
+    if (validIndices.length === 0) {
+      return distribution;
+    }
+    
+    // 计算三角分布权重
+    const weights: number[] = [];
+    const priceRange = high - low;
+    
+    if (priceRange < 1e-6) {
+      // 价格区间太小，均匀分布
+      weights.fill(1.0, 0, validIndices.length);
+    } else {
+      for (const idx of validIndices) {
+        const price = prices[idx];
+        const distance = Math.abs(price - vwap) / priceRange;
+        const weight = Math.max(0.1, 1.0 - distance);
+        weights.push(weight);
+      }
+    }
+    
+    // 归一化权重并分配成交量
+    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+    if (totalWeight > 0) {
+      for (let i = 0; i < validIndices.length; i++) {
+        const idx = validIndices[i];
+        const weight = weights[i];
+        const allocation = volume * (weight / totalWeight);
+        distribution[idx] += allocation;
+      }
+    }
+    
+    return distribution;
+  }
+  
+  // 计算VWAP（成交量加权平均价格）
+  private computeVwap(dayData: HistoricalData): number {
+    if (dayData.vwap) {
+      return dayData.vwap;
+    }
+    
+    // 使用典型价格近似
+    const { high, low, close } = dayData;
+    if (high > 0 && low > 0 && close > 0) {
+      return (high + low + close) / 3;
+    }
+    
+    return close || 0;
+  }
+  
+  // 估算流通股本
+  private estimateFloatShares(dayData: HistoricalData): number {
+    const { volume, turnover_rate } = dayData;
+    
+    if (volume > 0 && turnover_rate && turnover_rate > 0) {
+      return volume / (turnover_rate / 100);
+    }
+    
+    // 默认估算值（1亿股）
+    return 100000000;
+  }
+  
+  // 计算获利盘比例
+  calculateProfitRatio(currentPrice: number, distribution: ChipDistribution): number {
+    if (!distribution || distribution.volumes.length === 0) {
+      return 0.5;
+    }
+    
+    const totalVolume = distribution.volumes.reduce((sum, vol) => sum + vol, 0);
+    if (totalVolume <= 0) {
+      return 0.5;
+    }
+    
+    let profitableVolume = 0;
+    for (let i = 0; i < distribution.prices.length; i++) {
+      if (distribution.prices[i] <= currentPrice) {
+        profitableVolume += distribution.volumes[i];
+      }
+    }
+    
+    const profitRatio = profitableVolume / totalVolume;
+    return Math.max(0.05, Math.min(0.95, profitRatio));
+  }
+  
+  // 计算基尼系数（筹码集中度）
+  calculateGiniConcentration(distribution: ChipDistribution): number {
+    if (!distribution || distribution.volumes.length === 0) {
+      return 0.5;
+    }
+    
+    const volumes = distribution.volumes.filter(v => v > 0);
+    if (volumes.length < 2) {
+      return 0.5;
+    }
+    
+    const n = volumes.length;
+    const totalVolume = volumes.reduce((sum, vol) => sum + vol, 0);
+    
+    if (totalVolume <= 0) {
+      return 0.5;
+    }
+    
+    // 计算基尼系数
+    let giniSum = 0;
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        giniSum += Math.abs(volumes[i] - volumes[j]);
+      }
+    }
+    
+    const gini = giniSum / (2 * n * totalVolume);
+    const concentration = Math.min(1.0, gini * 2);
+    
+    return Math.max(0.1, Math.min(0.95, concentration));
+  }
 }
 
 // 增强的筹码集中度和获利盘比例计算函数
-function calculateEnhancedChipMetrics(stock: any, historicalData?: any[]): [number, number] {
+function calculateEnhancedChipMetrics(stock: any, historicalData?: HistoricalData[]): [number, number] {
   const turnoverRate = stock.turnover_rate || 5.0;
   const volumeRatio = stock.volume_ratio || 1.0;
   const pctChg = stock.pct_chg || 0.0;
   const currentPrice = stock.close || stock.price || 0;
   
-  // 如果有历史数据，使用增强算法
+  // 如果有历史数据，使用换手率递推法
   if (historicalData && historicalData.length >= 10) {
     return calculateChipDistributionBased(currentPrice, historicalData);
   }
@@ -23,103 +251,47 @@ function calculateEnhancedChipMetrics(stock: any, historicalData?: any[]): [numb
   return calculateImprovedEstimation(stock);
 }
 
-// 基于筹码分布的计算方法
-function calculateChipDistributionBased(currentPrice: number, historicalData: any[]): [number, number] {
-  // 构建筹码成本分布
-  const costDistribution: ChipDistribution = {};
-  const totalDays = historicalData.length;
+// 基于换手率递推法的计算
+function calculateChipDistributionBased(currentPrice: number, historicalData: HistoricalData[]): [number, number] {
+  const calculator = new ChipDistributionCalculator();
   
-  historicalData.forEach((dayData, index) => {
-    // 计算时间权重（越近期权重越高）
-    const daysAgo = totalDays - index - 1;
-    const timeWeight = Math.exp(-daysAgo / 20); // 20天衰减系数
+  try {
+    // 计算筹码分布
+    const distribution = calculator.calculateChipDistribution(historicalData);
     
-    // 获取价格和成交量数据
-    const closePrice = dayData.close || 0;
-    const volume = dayData.volume || 0;
-    const turnoverRate = dayData.turnover_rate || 0;
-    const highPrice = dayData.high || closePrice;
-    const lowPrice = dayData.low || closePrice;
-    
-    if (closePrice <= 0 || volume <= 0) return;
-    
-    // 计算换手调整系数
-    const turnoverWeight = Math.min(2.0, 1 + turnoverRate / 100);
-    
-    // 综合权重
-    const finalWeight = timeWeight * turnoverWeight * volume;
-    
-    // 在高低价区间内分布筹码
-    const priceLevels = [];
-    for (let i = 0; i < 5; i++) {
-      const priceLevel = lowPrice + (highPrice - lowPrice) * i / 4;
-      priceLevels.push(Math.round(priceLevel * 100) / 100);
+    if (!distribution) {
+      // 降级到估算方法
+      const lastData = historicalData[historicalData.length - 1];
+      const mockStock = {
+        turnover_rate: lastData.turnover_rate || 5.0,
+        volume_ratio: 1.0,
+        pct_chg: 0.0,
+        close: currentPrice
+      };
+      return calculateImprovedEstimation(mockStock);
     }
     
-    priceLevels.forEach(priceLevel => {
-      if (!costDistribution[priceLevel]) {
-        costDistribution[priceLevel] = 0;
-      }
-      costDistribution[priceLevel] += finalWeight / priceLevels.length;
-    });
-  });
-  
-  // 计算筹码集中度（基尼系数）
-  const concentration = calculateConcentrationFromDistribution(costDistribution);
-  
-  // 计算获利盘比例
-  const profitRatio = calculateProfitRatioFromDistribution(currentPrice, costDistribution);
-  
-  return [concentration, profitRatio];
-}
-
-// 从筹码分布计算集中度
-function calculateConcentrationFromDistribution(costDistribution: ChipDistribution): number {
-  const prices = Object.keys(costDistribution).map(Number).sort((a, b) => a - b);
-  const volumes = prices.map(price => costDistribution[price]);
-  
-  if (volumes.length === 0) return 0.5;
-  
-  const totalVolume = volumes.reduce((sum, vol) => sum + vol, 0);
-  if (totalVolume === 0) return 0.5;
-  
-  // 计算基尼系数
-  let gini = 0;
-  const n = volumes.length;
-  
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      gini += Math.abs(volumes[i] - volumes[j]);
-    }
+    // 计算筹码集中度
+    const concentration = calculator.calculateGiniConcentration(distribution);
+    
+    // 计算获利盘比例
+    const profitRatio = calculator.calculateProfitRatio(currentPrice, distribution);
+    
+    return [concentration, profitRatio];
+    
+  } catch (error) {
+    console.warn('筹码分布计算失败，使用估算方法:', error);
+    
+    // 降级到估算方法
+    const lastData = historicalData[historicalData.length - 1];
+    const mockStock = {
+      turnover_rate: lastData.turnover_rate || 5.0,
+      volume_ratio: 1.0,
+      pct_chg: 0.0,
+      close: currentPrice
+    };
+    return calculateImprovedEstimation(mockStock);
   }
-  
-  gini = gini / (2 * n * totalVolume);
-  
-  // 转换为集中度指标（0-1，越高越集中）
-  const concentration = Math.min(1.0, gini * 2);
-  
-  return Math.max(0.2, Math.min(0.95, concentration));
-}
-
-// 从筹码分布计算获利盘比例
-function calculateProfitRatioFromDistribution(currentPrice: number, costDistribution: ChipDistribution): number {
-  let profitableVolume = 0;
-  let totalVolume = 0;
-  
-  Object.entries(costDistribution).forEach(([priceStr, volume]) => {
-    const price = parseFloat(priceStr);
-    totalVolume += volume;
-    if (price < currentPrice) { // 成本价低于当前价格的为获利盘
-      profitableVolume += volume;
-    }
-  });
-  
-  if (totalVolume === 0) return 0.5;
-  
-  const profitRatio = profitableVolume / totalVolume;
-  
-  // 边界处理
-  return Math.max(0.05, Math.min(0.95, profitRatio));
 }
 
 // 改进的估算方法（当没有足够历史数据时）
@@ -156,7 +328,7 @@ function calculateImprovedEstimation(stock: any): [number, number] {
   // 改进的获利盘估算 - 基于多因子模型
   let profitRatio = 0.5; // 基础获利盘比例
   
-  // 涨跌幅影响
+  // 涨跌幅影响（分段处理）
   if (pctChg > 0) {
     // 上涨时获利盘增加，但需要考虑涨幅大小
     if (pctChg <= 3) {
