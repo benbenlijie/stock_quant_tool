@@ -1,6 +1,68 @@
 // Supabase Edge Function for Backtest Engine
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+// 增强的筹码集中度计算函数（用于模拟数据生成）
+function generateRealisticChipMetrics(pctChg: number, turnoverRate: number, volumeRatio: number): [number, number] {
+  // 基于市场规律生成更真实的筹码集中度和获利盘比例
+  
+  // 筹码集中度计算
+  let baseConcentration = 0.5;
+  
+  // 换手率因子：适度换手率最佳
+  const optimalTurnover = 8.0;
+  let turnoverFactor = 1.0 - Math.abs(turnoverRate - optimalTurnover) / 20.0;
+  turnoverFactor = Math.max(0.3, Math.min(1.2, turnoverFactor));
+  
+  // 量比因子：适度放量表示有资金介入
+  const volumeFactor = Math.min(1.3, Math.max(0.7, 0.8 + volumeRatio / 10));
+  
+  // 涨幅因子：适度上涨配合集中度
+  let priceFactor = 1.0;
+  if (pctChg >= 2 && pctChg <= 8) {
+    priceFactor = 1.1;
+  } else if (pctChg > 9) {
+    priceFactor = 1.2;
+  } else if (pctChg < -3) {
+    priceFactor = 0.9;
+  }
+  
+  // 综合计算集中度
+  let concentration = baseConcentration * turnoverFactor * volumeFactor * priceFactor;
+  concentration = Math.max(0.2, Math.min(0.95, concentration));
+  
+  // 获利盘比例计算 - 基于多因子模型
+  let profitRatio = 0.5; // 基础获利盘比例
+  
+  // 涨跌幅影响
+  if (pctChg > 0) {
+    // 上涨时获利盘增加，但需要考虑涨幅大小
+    if (pctChg <= 3) {
+      profitRatio += pctChg / 20; // 温和上涨
+    } else if (pctChg <= 7) {
+      profitRatio += 0.15 + (pctChg - 3) / 40; // 适度上涨
+    } else {
+      profitRatio += 0.25 + Math.min(0.15, (pctChg - 7) / 60); // 大涨但增幅递减
+    }
+  } else {
+    // 下跌时获利盘减少
+    profitRatio += Math.max(-0.3, pctChg / 15);
+  }
+  
+  // 换手率影响 - 高换手可能意味着获利盘在减少
+  if (turnoverRate > 10) {
+    profitRatio -= Math.min(0.1, (turnoverRate - 10) / 100);
+  }
+  
+  // 量比影响 - 放量上涨增加获利盘可信度
+  if (volumeRatio > 1.5 && pctChg > 2) {
+    profitRatio += Math.min(0.05, (volumeRatio - 1.5) / 20);
+  }
+  
+  profitRatio = Math.max(0.1, Math.min(0.9, profitRatio));
+  
+  return [concentration, profitRatio];
+}
+
 interface BacktestConfig {
   startDate: string;
   endDate: string;
@@ -154,6 +216,8 @@ class BacktestEngine {
         const basePrice = 10 + Math.random() * 100;
         const pctChg = (Math.random() - 0.5) * 20; // -10% to +10%
         
+        const [chipConcentration, profitRatio] = generateRealisticChipMetrics(pctChg, 1 + Math.random() * 15, 0.5 + Math.random() * 3);
+
         data.push({
           stock_code: stock,
           stock_name: stockNames[index],
@@ -162,8 +226,8 @@ class BacktestEngine {
           turnover_rate: 1 + Math.random() * 15,
           volume_ratio: 0.5 + Math.random() * 3,
           market_cap: 50 + Math.random() * 500, // 亿元
-          chip_concentration: 0.3 + Math.random() * 0.6,
-          profit_ratio: 0.2 + Math.random() * 0.6,
+          chip_concentration: chipConcentration,
+          profit_ratio: profitRatio,
           trade_date: dateStr
         });
       });

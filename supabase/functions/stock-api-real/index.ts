@@ -2,8 +2,128 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-// 改进的筹码集中度计算函数
-function calculateImprovedChipConcentration(stock: any): [number, number] {
+// 筹码分布数据结构
+interface ChipDistribution {
+  [price: number]: number; // 价格 -> 成交量权重
+}
+
+// 增强的筹码集中度和获利盘比例计算函数
+function calculateEnhancedChipMetrics(stock: any, historicalData?: any[]): [number, number] {
+  const turnoverRate = stock.turnover_rate || 5.0;
+  const volumeRatio = stock.volume_ratio || 1.0;
+  const pctChg = stock.pct_chg || 0.0;
+  const currentPrice = stock.close || stock.price || 0;
+  
+  // 如果有历史数据，使用增强算法
+  if (historicalData && historicalData.length >= 10) {
+    return calculateChipDistributionBased(currentPrice, historicalData);
+  }
+  
+  // 否则使用改进的估算方法
+  return calculateImprovedEstimation(stock);
+}
+
+// 基于筹码分布的计算方法
+function calculateChipDistributionBased(currentPrice: number, historicalData: any[]): [number, number] {
+  // 构建筹码成本分布
+  const costDistribution: ChipDistribution = {};
+  const totalDays = historicalData.length;
+  
+  historicalData.forEach((dayData, index) => {
+    // 计算时间权重（越近期权重越高）
+    const daysAgo = totalDays - index - 1;
+    const timeWeight = Math.exp(-daysAgo / 20); // 20天衰减系数
+    
+    // 获取价格和成交量数据
+    const closePrice = dayData.close || 0;
+    const volume = dayData.volume || 0;
+    const turnoverRate = dayData.turnover_rate || 0;
+    const highPrice = dayData.high || closePrice;
+    const lowPrice = dayData.low || closePrice;
+    
+    if (closePrice <= 0 || volume <= 0) return;
+    
+    // 计算换手调整系数
+    const turnoverWeight = Math.min(2.0, 1 + turnoverRate / 100);
+    
+    // 综合权重
+    const finalWeight = timeWeight * turnoverWeight * volume;
+    
+    // 在高低价区间内分布筹码
+    const priceLevels = [];
+    for (let i = 0; i < 5; i++) {
+      const priceLevel = lowPrice + (highPrice - lowPrice) * i / 4;
+      priceLevels.push(Math.round(priceLevel * 100) / 100);
+    }
+    
+    priceLevels.forEach(priceLevel => {
+      if (!costDistribution[priceLevel]) {
+        costDistribution[priceLevel] = 0;
+      }
+      costDistribution[priceLevel] += finalWeight / priceLevels.length;
+    });
+  });
+  
+  // 计算筹码集中度（基尼系数）
+  const concentration = calculateConcentrationFromDistribution(costDistribution);
+  
+  // 计算获利盘比例
+  const profitRatio = calculateProfitRatioFromDistribution(currentPrice, costDistribution);
+  
+  return [concentration, profitRatio];
+}
+
+// 从筹码分布计算集中度
+function calculateConcentrationFromDistribution(costDistribution: ChipDistribution): number {
+  const prices = Object.keys(costDistribution).map(Number).sort((a, b) => a - b);
+  const volumes = prices.map(price => costDistribution[price]);
+  
+  if (volumes.length === 0) return 0.5;
+  
+  const totalVolume = volumes.reduce((sum, vol) => sum + vol, 0);
+  if (totalVolume === 0) return 0.5;
+  
+  // 计算基尼系数
+  let gini = 0;
+  const n = volumes.length;
+  
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      gini += Math.abs(volumes[i] - volumes[j]);
+    }
+  }
+  
+  gini = gini / (2 * n * totalVolume);
+  
+  // 转换为集中度指标（0-1，越高越集中）
+  const concentration = Math.min(1.0, gini * 2);
+  
+  return Math.max(0.2, Math.min(0.95, concentration));
+}
+
+// 从筹码分布计算获利盘比例
+function calculateProfitRatioFromDistribution(currentPrice: number, costDistribution: ChipDistribution): number {
+  let profitableVolume = 0;
+  let totalVolume = 0;
+  
+  Object.entries(costDistribution).forEach(([priceStr, volume]) => {
+    const price = parseFloat(priceStr);
+    totalVolume += volume;
+    if (price < currentPrice) { // 成本价低于当前价格的为获利盘
+      profitableVolume += volume;
+    }
+  });
+  
+  if (totalVolume === 0) return 0.5;
+  
+  const profitRatio = profitableVolume / totalVolume;
+  
+  // 边界处理
+  return Math.max(0.05, Math.min(0.95, profitRatio));
+}
+
+// 改进的估算方法（当没有足够历史数据时）
+function calculateImprovedEstimation(stock: any): [number, number] {
   const turnoverRate = stock.turnover_rate || 5.0;
   const volumeRatio = stock.volume_ratio || 1.0;
   const pctChg = stock.pct_chg || 0.0;
@@ -33,16 +153,42 @@ function calculateImprovedChipConcentration(stock: any): [number, number] {
   let concentration = baseConcentration * turnoverFactor * volumeFactor * priceFactor;
   concentration = Math.max(0.2, Math.min(0.95, concentration));
   
-  // 获利盘估算
-  let profitRatio = 0.5;
+  // 改进的获利盘估算 - 基于多因子模型
+  let profitRatio = 0.5; // 基础获利盘比例
+  
+  // 涨跌幅影响
   if (pctChg > 0) {
-    profitRatio += Math.min(0.3, pctChg / 30);
+    // 上涨时获利盘增加，但需要考虑涨幅大小
+    if (pctChg <= 3) {
+      profitRatio += pctChg / 20; // 温和上涨
+    } else if (pctChg <= 7) {
+      profitRatio += 0.15 + (pctChg - 3) / 40; // 适度上涨
+    } else {
+      profitRatio += 0.25 + Math.min(0.15, (pctChg - 7) / 60); // 大涨但增幅递减
+    }
   } else {
-    profitRatio += Math.max(-0.3, pctChg / 20);
+    // 下跌时获利盘减少
+    profitRatio += Math.max(-0.3, pctChg / 15);
   }
+  
+  // 换手率影响 - 高换手可能意味着获利盘在减少
+  if (turnoverRate > 10) {
+    profitRatio -= Math.min(0.1, (turnoverRate - 10) / 100);
+  }
+  
+  // 量比影响 - 放量上涨增加获利盘可信度
+  if (volumeRatio > 1.5 && pctChg > 2) {
+    profitRatio += Math.min(0.05, (volumeRatio - 1.5) / 20);
+  }
+  
   profitRatio = Math.max(0.1, Math.min(0.9, profitRatio));
   
   return [concentration, profitRatio];
+}
+
+// 保持原函数名以兼容现有代码
+function calculateImprovedChipConcentration(stock: any): [number, number] {
+  return calculateEnhancedChipMetrics(stock);
 }
 
 Deno.serve(async (req) => {
